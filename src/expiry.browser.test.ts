@@ -45,7 +45,13 @@ async function repository(expiring = "none", consistent = true) {
   async function rotateRoot() {
     const metadata = JSON.parse(new TextDecoder().decode(files.get("root.json")));
     metadata.signed.version = 2;
-    metadata.signed.roles.targets.threshold = 2;
+    const extraPair = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]);
+    const extraKey = { ...key, keyval: { public: Uint8ArrayToHex(new Uint8Array(
+      await crypto.subtle.exportKey("raw", extraPair.publicKey))) } };
+    const extraId = Uint8ArrayToHex(new Uint8Array(await crypto.subtle.digest(
+      "SHA-256", utf8(canonicalizeOLPC(extraKey)))));
+    metadata.signed.keys[extraId] = extraKey;
+    metadata.signed.roles.targets = { keyids: [keyid, extraId], threshold: 2 };
     metadata.signatures[0].sig = Uint8ArrayToHex(new Uint8Array(await crypto.subtle.sign(
       "Ed25519", pair.privateKey, utf8(canonicalizeOLPC(metadata.signed)))));
     files.set("2.root.json", encode(metadata));
