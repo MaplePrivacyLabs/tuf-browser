@@ -13,12 +13,14 @@ export function decodeRawBytesWrapper(wrapper) {
 export function createRawBytesWrapper(value) {
     return { __raw_bytes__: Uint8ArrayToBase64(value) };
 }
-// Legacy object caches were written with JSON.stringify; raw wrappers retain
-// the exact downloaded bytes, including insignificant whitespace.
+// Raw wrappers retain the exact downloaded bytes, including insignificant
+// whitespace. Legacy object caches were written with JSON.stringify.
 export function storedBytes(value) {
     if (value === undefined || value === null)
         return undefined;
-    return isRawBytesWrapper(value) ? base64ToUint8Array(value.__raw_bytes__)
-        : new TextEncoder().encode(JSON.stringify(value));
+    if (isRawBytesWrapper(value)) {
+        return base64ToUint8Array(value.__raw_bytes__);
+    }
+    return new TextEncoder().encode(JSON.stringify(value));
 }
 //# sourceMappingURL=encoding.js.map

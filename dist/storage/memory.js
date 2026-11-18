@@ -1,5 +1,4 @@
-import { storedBytes } from "./encoding.js";
-import { createRawBytesWrapper, decodeRawBytesWrapper, isRawBytesWrapper } from "./encoding.js";
+import { createRawBytesWrapper, decodeRawBytesWrapper, isRawBytesWrapper, storedBytes, } from "./encoding.js";
 export class MemoryBackend {
     constructor() {
         this.cache = new Map();

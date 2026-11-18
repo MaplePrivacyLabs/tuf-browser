@@ -25,8 +25,10 @@ export declare class TUFClient {
     private updateTimestamp;
     private updateSnapshot;
     private updateTargets;
+    private cachedChainMatches;
     private checkExpiry;
     private trustedTargets;
+    private trustedCachedRole;
     listSignedTargets(): Promise<string[]>;
     private fetchTarget;
     updateTUF(): Promise<void>;
