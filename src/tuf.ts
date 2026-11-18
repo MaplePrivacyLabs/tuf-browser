@@ -321,15 +321,13 @@ export class TUFClient {
     // Fast-forward recovery: If timestamp or snapshot role keys changed, delete cached metadata.
     // This allows recovery from fast-forward attacks after key rotation.
     if (root.version > oldRoot.version) {
-      const timestampKeysChanged =
-        JSON.stringify(root.roles.timestamp.keyids.slice().sort()) !==
-        JSON.stringify(oldRoot.roles.timestamp.keyids.slice().sort());
-      const snapshotKeysChanged =
-        JSON.stringify(root.roles.snapshot.keyids.slice().sort()) !==
-        JSON.stringify(oldRoot.roles.snapshot.keyids.slice().sort());
-      const targetsKeysChanged =
-        JSON.stringify(root.roles.targets.keyids.slice().sort()) !==
-        JSON.stringify(oldRoot.roles.targets.keyids.slice().sort());
+      // Sort copies: the key ID arrays are signed data.
+      const keysChanged = (role: Roles) =>
+        JSON.stringify(root.roles[role].keyids.slice().sort()) !==
+        JSON.stringify(oldRoot.roles[role].keyids.slice().sort());
+      const timestampKeysChanged = keysChanged(Roles.Timestamp);
+      const snapshotKeysChanged = keysChanged(Roles.Snapshot);
+      const targetsKeysChanged = keysChanged(Roles.Targets);
 
       if (timestampKeysChanged) {
         await this.backend.delete(this.getCacheKey(Roles.Timestamp));
@@ -610,6 +608,19 @@ export class TUFClient {
     await this.backend.writeRaw(this.getCacheKey(Roles.Targets), newTargetsRaw);
   }
 
+  // Whether cached snapshot and targets are the versions the chain from
+  // `timestamp` names, as after a completed update.
+  private async cachedChainMatches(timestamp: Metafile): Promise<boolean> {
+    const snapshot = await this.getFromCache(Roles.Snapshot);
+    const targets = await this.getFromCache(Roles.Targets);
+    if (!snapshot || !targets) return false;
+    return (
+      snapshot.signed.version ===
+        timestamp.signed.meta["snapshot.json"].version &&
+      targets.signed.version === snapshot.signed.meta["targets.json"].version
+    );
+  }
+
   private checkExpiry(metadata: Metafile, time: Date): void {
     if (!(new Date(metadata.signed.expires) > time)) {
       throw new Error(`Freeze attack on the ${metadata.signed._type} metafile.`);
@@ -618,64 +629,91 @@ export class TUFClient {
 
   // Cached metadata is trusted storage, but may have expired or belong to a
   // partially completed update. Check the entire chain before using targets.
-  private async trustedTargets(time: Date): Promise<Metafile> {
-    const rootJson = await this.getFromCache(Roles.Root) ??
-      await this.bootstrapRoot(this.startingRoot);
+  private async trustedTargets(
+    time: Date,
+  ): Promise<{ root: Metafile; targets: Metafile }> {
+    const rootJson =
+      (await this.getFromCache(Roles.Root)) ??
+      (await this.bootstrapRoot(this.startingRoot));
     const root = await this.loadRoot(rootJson);
     this.checkExpiry(rootJson, time);
-    let parent: Metafile | undefined;
-    for (const role of [Roles.Timestamp, Roles.Snapshot, Roles.Targets]) {
-      const metadata = await this.getFromCache(role);
-      if (!metadata) throw new Error(`Missing trusted ${role} metadata.`);
-      this.validateMetadata(metadata);
-      if (metadata.signed._type !== role) {
-        throw new Error(`Incorrect cached metadata type for ${role}.`);
-      }
-      if (!await checkSignatures(root.keys, root.roles[role].keyids,
-        metadata.signed, metadata.signatures, root.roles[role].threshold)) {
-        throw new Error(`Failed verifying cached ${role} role signature(s).`);
-      }
-      this.checkExpiry(metadata, time);
-      if (parent && parent.signed.meta[`${role}.json`]?.version !== metadata.signed.version) {
-        throw new Error(`Cached ${role} version does not match trusted ${parent.signed._type}.`);
-      }
-      const pin = parent?.signed.meta[`${role}.json`];
-      if (pin && (pin.length !== undefined || pin.hashes)) {
-        const raw = await this.backend.readRaw?.(this.getCacheKey(role));
-        if (!raw) throw new Error(`Raw cached ${role} metadata is required to verify integrity.`);
-        if (pin.length !== undefined && raw.length !== pin.length) {
-          throw new Error(`Cached ${role} length mismatch.`);
-        }
-        await this.verifyHashes(raw, pin.hashes, `Cached ${role}`);
-      }
-      parent = metadata;
+
+    const timestamp = await this.trustedCachedRole(Roles.Timestamp, root, time);
+    const snapshot = await this.trustedCachedRole(
+      Roles.Snapshot,
+      root,
+      time,
+      timestamp,
+    );
+    const targets = await this.trustedCachedRole(
+      Roles.Targets,
+      root,
+      time,
+      snapshot,
+    );
+    return { root: rootJson, targets };
+  }
+
+  // Cached metadata for `role`, after checking its type, signatures against
+  // the current root, expiry, and the version, length and hashes that its
+  // parent role pins.
+  private async trustedCachedRole(
+    role: Roles,
+    root: Root,
+    time: Date,
+    parent?: Metafile,
+  ): Promise<Metafile> {
+    const metadata = await this.getFromCache(role);
+    if (!metadata) throw new Error(`Missing trusted ${role} metadata.`);
+    this.validateMetadata(metadata);
+    if (metadata.signed._type !== role) {
+      throw new Error(`Incorrect cached metadata type for ${role}.`);
     }
-    return parent!;
+
+    const signed = await checkSignatures(
+      root.keys,
+      root.roles[role].keyids,
+      metadata.signed,
+      metadata.signatures,
+      root.roles[role].threshold,
+    );
+    if (!signed) {
+      throw new Error(`Failed verifying cached ${role} role signature(s).`);
+    }
+
+    this.checkExpiry(metadata, time);
+
+    if (!parent) return metadata;
+    const pin = parent.signed.meta[`${role}.json`];
+    if (pin?.version !== metadata.signed.version) {
+      throw new Error(
+        `Cached ${role} version does not match trusted ${parent.signed._type}.`,
+      );
+    }
+    if (pin && (pin.length !== undefined || pin.hashes)) {
+      const raw = await this.backend.readRaw?.(this.getCacheKey(role));
+      if (!raw) {
+        throw new Error(
+          `Raw cached ${role} metadata is required to verify integrity.`,
+        );
+      }
+      if (pin.length !== undefined && raw.length !== pin.length) {
+        throw new Error(`Cached ${role} length mismatch.`);
+      }
+      await this.verifyHashes(raw, pin.hashes, `Cached ${role}`);
+    }
+    return metadata;
   }
 
   public async listSignedTargets() {
-    const cachedTargets = await this.trustedTargets(new Date());
-
-    const filenames: Array<string> = [];
-
-    if (cachedTargets) {
-      for (const filename of Object.keys(cachedTargets.signed.targets)) {
-        filenames.push(filename);
-      }
-    }
-    return filenames;
+    const { targets } = await this.trustedTargets(new Date());
+    return Object.keys(targets.signed.targets);
   }
 
   private async fetchTarget(name: string): Promise<ArrayBuffer> {
-    const cachedTargets = await this.trustedTargets(new Date());
-    const rootJson = await this.getFromCache(Roles.Root) ??
-      await this.bootstrapRoot(this.startingRoot);
-
-    if (cachedTargets === undefined) {
-      throw new Error(
-        "Failed to find the targets metafile when it should have existed.",
-      );
-    }
+    const { root, targets: cachedTargets } = await this.trustedTargets(
+      new Date(),
+    );
 
     if (!(name in cachedTargets.signed.targets)) {
       throw new Error(`${name} not present in the targets role.`);
@@ -702,8 +740,11 @@ export class TUFClient {
         ? `${this.targetBaseUrl}${hashForUrl}.${name}` // No directory: HASH.filename
         : `${this.targetBaseUrl}${name.substring(0, lastSlash + 1)}${hashForUrl}.${name.substring(lastSlash + 1)}`; // dir/HASH.filename
 
-    const response = await fetch(rootJson.signed.consistent_snapshot
-      ? targetUrl : `${this.targetBaseUrl}${name}`);
+    const response = await fetch(
+      root.signed.consistent_snapshot
+        ? targetUrl
+        : `${this.targetBaseUrl}${name}`,
+    );
     if (!response.ok) {
       throw new Error(
         `Failed to fetch target: ${response.status} ${response.statusText}`,
@@ -732,12 +773,9 @@ export class TUFClient {
 
     // An unchanged timestamp does not establish that cached metadata is timely.
     if (timestampMeta === null) {
-      const snapshot = await this.getFromCache(Roles.Snapshot);
-      const targets = await this.getFromCache(Roles.Targets);
-      const timestamp = (await this.getFromCache(Roles.Timestamp))!;
-      if (!snapshot || !targets ||
-        snapshot.signed.version !== timestamp.signed.meta["snapshot.json"].version ||
-        targets.signed.version !== snapshot.signed.meta["targets.json"].version) {
+      // updateTimestamp only reports no change when a timestamp is cached.
+      const timestamp = (await this.getFromCache(Roles.Timestamp)) as Metafile;
+      if (!(await this.cachedChainMatches(timestamp))) {
         // Resume an interrupted update without discarding rollback state.
         const meta = await this.updateSnapshot(root, frozenTimestamp, timestamp);
         await this.updateTargets(root, frozenTimestamp, meta);
