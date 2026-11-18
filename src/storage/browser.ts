@@ -1,5 +1,6 @@
 import { FileBackend } from "../storage.js";
 import { Metafile } from "../types.js";
+import { storedBytes } from "./encoding.js";
 import {
   createRawBytesWrapper,
   decodeRawBytesWrapper,
@@ -16,6 +17,11 @@ export class ExtensionStorageBackend implements FileBackend {
     }
 
     return value;
+  }
+
+  async readRaw(key: string): Promise<Uint8Array | undefined> {
+    const result = await browser.storage.local.get(key);
+    return storedBytes(result[key]);
   }
 
   async write(key: string, value: Metafile): Promise<void> {
