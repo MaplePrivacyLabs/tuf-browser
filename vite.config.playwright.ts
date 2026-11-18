@@ -8,7 +8,9 @@ export default defineConfig({
       enabled: true,
       provider: playwright(),
       headless: true,
-      instances: [{ browser: "chromium" }],
+      instances: (process.env.BROWSERS ?? "chromium").split(",").map(browser => ({
+        browser: browser as "chromium" | "firefox" | "webkit",
+      })),
     },
   },
 });
