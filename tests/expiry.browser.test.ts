@@ -1,6 +1,7 @@
 import { canonicalizeOLPC, Uint8ArrayToHex } from "@freedomofpress/crypto-browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { LocalStorageBackend } from "../src/storage/localstorage.js";
 import { MemoryBackend } from "../src/storage/memory.js";
 import { TUFClient } from "../src/tuf.js";
 
@@ -8,9 +9,11 @@ const utf8 = (value: string) => new TextEncoder().encode(value);
 
 const start = new Date("2030-01-01T00:00:00Z");
 const later = new Date("2030-01-03T00:00:00Z");
-const encode = (value: unknown) => utf8(JSON.stringify(value));
+const encode = (value: unknown) => utf8(JSON.stringify(value, null, 2));
 
-async function repository(expiring = "none", consistent = true) {
+const localNamespaces = new Set<string>();
+
+async function repository(expiring = "none", consistent = true, useLocalStorage = false) {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(start);
   const pair = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]);
@@ -24,7 +27,7 @@ async function repository(expiring = "none", consistent = true) {
     const extraId = Uint8ArrayToHex(new Uint8Array(await crypto.subtle.digest(
       "SHA-256", utf8(canonicalizeOLPC(extraKey)))));
   const role = { keyids: [keyid], threshold: 1 };
-  const roles = { root: role, timestamp: role, snapshot: role, targets: { keyids: [keyid, extraId], threshold: 1 } };
+  const roles = { root: role, timestamp: role, snapshot: role, targets: { keyids: [keyid, extraId].sort().reverse(), threshold: 1 } };
   const files = new Map<string, Uint8Array>();
   const payload = utf8("first");
   let root = "";
@@ -52,11 +55,11 @@ async function repository(expiring = "none", consistent = true) {
     files.set(`${hash}.file.txt`, content);
     files.set("file.txt", content);
   }
-  async function rotateRoot(snapshotKey = false) {
+  async function rotateRoot(snapshotKey = false, targetsThreshold = 2) {
     const metadata = JSON.parse(new TextDecoder().decode(files.get("root.json")));
     metadata.signed.version = 2;
     if (snapshotKey) metadata.signed.roles.snapshot = { keyids: [extraId], threshold: 1 };
-    else metadata.signed.roles.targets.threshold = 2;
+    else metadata.signed.roles.targets.threshold = targetsThreshold;
     metadata.signatures[0].sig = Uint8ArrayToHex(new Uint8Array(await crypto.subtle.sign(
       "Ed25519", pair.privateKey, utf8(canonicalizeOLPC(metadata.signed)))));
     files.set("2.root.json", encode(metadata));
@@ -69,12 +72,23 @@ async function repository(expiring = "none", consistent = true) {
     const data = files.get(name);
     return new Response(data ? new Uint8Array(data) : null, { status: data ? 200 : 404 });
   }));
-  const backend = new MemoryBackend();
-  const client = () => new TUFClient("https://repo.invalid/", root, "test", undefined, { backend });
-  return { client, backend, files, publish, rotateRoot, requests };
+  const namespace = useLocalStorage ? `expiry-test-${crypto.randomUUID()}` : "test";
+  if (useLocalStorage) localNamespaces.add(namespace);
+  const backend = useLocalStorage ? new LocalStorageBackend() : new MemoryBackend();
+  const client = () => new TUFClient("https://repo.invalid/", root, namespace, undefined,
+    useLocalStorage ? undefined : { backend });
+  return { client, backend, files, publish, rotateRoot, requests, namespace };
 }
 
-afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+afterEach(() => {
+  vi.useRealTimers(); vi.unstubAllGlobals();
+  for (const namespace of localNamespaces) {
+    for (const role of ["root", "timestamp", "snapshot", "targets"]) {
+      localStorage.removeItem(`${namespace}/${role}.json`);
+    }
+  }
+  localNamespaces.clear();
+});
 
 describe("trusted metadata freshness", () => {
   for (const role of ["root", "timestamp", "snapshot", "targets"]) {
@@ -109,6 +123,46 @@ describe("trusted metadata freshness", () => {
     expect(await repo.backend.read("test/timestamp.json")).toBeUndefined();
     expect(await repo.backend.read("test/snapshot.json")).toBeUndefined();
   });
+  for (const role of ["snapshot", "targets"]) {
+    it(`rejects an expired downloaded ${role} after a new timestamp`, async () => {
+      const repo = await repository(role);
+      await repo.client().updateTUF();
+      await repo.publish(2);
+      vi.setSystemTime(later);
+      await expect(repo.client().updateTUF()).rejects.toThrow(`Freeze attack on the ${role} metafile.`);
+      expect((await repo.backend.read(`test/${role}.json`))?.signed.version).toBe(1);
+    });
+  }
+  it("preserves unsorted signed role keys during a healthy root rotation", async () => {
+    const repo = await repository();
+    await repo.client().updateTUF();
+    await repo.rotateRoot(false, 1);
+    await repo.client().updateTUF();
+    expect((await repo.backend.read("test/root.json"))?.signed.version).toBe(2);
+    await repo.client().updateTUF();
+    expect(new TextDecoder().decode(await repo.client().getTarget("file.txt"))).toBe("first");
+  });
+  it("round-trips pretty-printed hash-pinned metadata through the default localStorage cache", async () => {
+    const repo = await repository("none", true, true);
+    await repo.client().updateTUF();
+    expect(localStorage.getItem(`${repo.namespace}/snapshot.json`)).toContain("__raw_bytes__");
+    await repo.client().updateTUF();
+    expect(new TextDecoder().decode(await repo.client().getTarget("file.txt"))).toBe("first");
+    await repo.publish(2, utf8("second"));
+    await repo.client().updateTUF();
+    expect(new TextDecoder().decode(await repo.client().getTarget("file.txt"))).toBe("second");
+  });
+  for (const role of ["root", "timestamp", "snapshot", "targets"]) {
+    it(`rejects expired ${role} through the default localStorage cache`, async () => {
+      const repo = await repository(role, true, true);
+      await repo.client().updateTUF();
+      vi.setSystemTime(later);
+      const error = `Freeze attack on the ${role} metafile.`;
+      await expect(repo.client().updateTUF()).rejects.toThrow(error);
+      await expect(repo.client().getTarget("file.txt")).rejects.toThrow(error);
+      await expect(repo.client().listSignedTargets()).rejects.toThrow(error);
+    });
+  }
   it("does not renew an expired trusted timestamp with the same version", async () => {
     const repo = await repository("timestamp");
     await repo.client().updateTUF();
