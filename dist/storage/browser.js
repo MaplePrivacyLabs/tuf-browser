@@ -1,3 +1,4 @@
+import { storedBytes } from "./encoding.js";
 import { createRawBytesWrapper, decodeRawBytesWrapper, isRawBytesWrapper, } from "./encoding.js";
 export class ExtensionStorageBackend {
     async read(key) {
@@ -7,6 +8,10 @@ export class ExtensionStorageBackend {
             return decodeRawBytesWrapper(value);
         }
         return value;
+    }
+    async readRaw(key) {
+        const result = await browser.storage.local.get(key);
+        return storedBytes(result[key]);
     }
     async write(key, value) {
         await browser.storage.local.set({ [key]: value });

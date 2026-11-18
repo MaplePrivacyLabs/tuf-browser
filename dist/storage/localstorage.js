@@ -1,3 +1,4 @@
+import { storedBytes } from "./encoding.js";
 import { createRawBytesWrapper, decodeRawBytesWrapper, isRawBytesWrapper, } from "./encoding.js";
 export class LocalStorageBackend {
     async read(key) {
@@ -9,6 +10,10 @@ export class LocalStorageBackend {
             }
             return parsed;
         }
+    }
+    async readRaw(key) {
+        const value = localStorage.getItem(key);
+        return storedBytes(value === null ? undefined : JSON.parse(value));
     }
     async write(key, value) {
         localStorage.setItem(key, JSON.stringify(value));

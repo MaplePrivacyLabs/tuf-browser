@@ -10,6 +10,14 @@ export class FSBackend {
             return undefined;
         }
     }
+    async readRaw(key) {
+        try {
+            return new Uint8Array(await fs.readFile(key));
+        }
+        catch {
+            return undefined;
+        }
+    }
     async write(key, value) {
         await this.ensureParentDir(key);
         await fs.writeFile(key, JSON.stringify(value), "utf8");

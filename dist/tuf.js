@@ -421,6 +421,16 @@ export class TUFClient {
             if (parent && parent.signed.meta[`${role}.json`]?.version !== metadata.signed.version) {
                 throw new Error(`Cached ${role} version does not match trusted ${parent.signed._type}.`);
             }
+            const pin = parent?.signed.meta[`${role}.json`];
+            if (pin && (pin.length !== undefined || pin.hashes)) {
+                const raw = await this.backend.readRaw?.(this.getCacheKey(role));
+                if (!raw)
+                    throw new Error(`Raw cached ${role} metadata is required to verify integrity.`);
+                if (pin.length !== undefined && raw.length !== pin.length) {
+                    throw new Error(`Cached ${role} length mismatch.`);
+                }
+                await this.verifyHashes(raw, pin.hashes, `Cached ${role}`);
+            }
             parent = metadata;
         }
         return parent;

@@ -1,3 +1,4 @@
+import { storedBytes } from "./encoding.js";
 import { createRawBytesWrapper, decodeRawBytesWrapper, isRawBytesWrapper } from "./encoding.js";
 export class MemoryBackend {
     constructor() {
@@ -11,6 +12,9 @@ export class MemoryBackend {
             return decodeRawBytesWrapper(value);
         }
         return value;
+    }
+    async readRaw(key) {
+        return storedBytes(this.cache.get(key));
     }
     async write(key, value) {
         this.cache.set(key, value);
