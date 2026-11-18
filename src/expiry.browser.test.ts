@@ -52,10 +52,11 @@ async function repository(expiring = "none", consistent = true) {
     files.set(`${hash}.file.txt`, content);
     files.set("file.txt", content);
   }
-  async function rotateRoot() {
+  async function rotateRoot(snapshotKey = false) {
     const metadata = JSON.parse(new TextDecoder().decode(files.get("root.json")));
     metadata.signed.version = 2;
-    metadata.signed.roles.targets.threshold = 2;
+    if (snapshotKey) metadata.signed.roles.snapshot = { keyids: [extraId], threshold: 1 };
+    else metadata.signed.roles.targets.threshold = 2;
     metadata.signatures[0].sig = Uint8ArrayToHex(new Uint8Array(await crypto.subtle.sign(
       "Ed25519", pair.privateKey, utf8(canonicalizeOLPC(metadata.signed)))));
     files.set("2.root.json", encode(metadata));
@@ -88,6 +89,26 @@ describe("trusted metadata freshness", () => {
       expect(repo.requests.some(name => name.endsWith("file.txt"))).toBe(false);
     });
   }
+  for (const role of ["root", "timestamp", "snapshot", "targets"]) {
+    it(`rejects ${role} at the exact expiration instant`, async () => {
+      const repo = await repository(role);
+      await repo.client().updateTUF();
+      vi.setSystemTime(new Date("2030-01-02T00:00:00Z"));
+      const error = `Freeze attack on the ${role} metafile.`;
+      await expect(repo.client().updateTUF()).rejects.toThrow(error);
+      await expect(repo.client().getTarget("file.txt")).rejects.toThrow(error);
+    });
+  }
+  it("deletes timestamp and snapshot rollback floors on snapshot-key rotation", async () => {
+    const repo = await repository();
+    await repo.client().updateTUF();
+    await repo.rotateRoot(true);
+    repo.files.delete("timestamp.json");
+    await expect(repo.client().updateTUF()).rejects.toThrow("Failed to fetch file: 404");
+    expect((await repo.backend.read("test/root.json"))?.signed.version).toBe(2);
+    expect(await repo.backend.read("test/timestamp.json")).toBeUndefined();
+    expect(await repo.backend.read("test/snapshot.json")).toBeUndefined();
+  });
   it("does not renew an expired trusted timestamp with the same version", async () => {
     const repo = await repository("timestamp");
     await repo.client().updateTUF();
