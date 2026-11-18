@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
+import { preparationScripts, releaseManifest } from './release-policy.mjs';
+
 const run = (cmd, args, cwd) => execFileSync(cmd, args, { cwd, stdio: 'inherit' });
 const root = resolve(import.meta.dirname, '..');
 const read = (file) => JSON.parse(readFileSync(join(root, file), 'utf8'));
@@ -16,9 +18,8 @@ if (release.node !== '26.13.1' || release.typescript !== '6.0.3') {
 }
 if (process.versions.node !== release.node) throw new Error(`Use Node ${release.node}`);
 const source = (file) => JSON.parse(execFileSync('git', ['show', `${release.source}:${file}`], { cwd: root, encoding: 'utf8' }));
-const expected = source('package.json');
+const expected = releaseManifest(source('package.json'));
 const expectedLock = source('package-lock.json');
-delete expected.scripts.prepare;
 if (expected.name === '@freedomofpress/sigstore-browser') {
   if (!sha.test(release.tufRelease)) throw new Error('Expected a full TUF release commit');
   const dependency = '@freedomofpress/tuf-browser';
@@ -33,9 +34,10 @@ if (expected.name === '@freedomofpress/sigstore-browser') {
   throw new Error('Unexpected package');
 }
 if (expected.devDependencies.typescript !== release.typescript) throw new Error('Compiler pin mismatch');
-for (const hook of ['prepare', 'preinstall', 'install', 'postinstall']) {
-  if (Object.hasOwn(read('package.json').scripts, hook)) throw new Error(`Forbidden release hook: ${hook}`);
+for (const hook of preparationScripts) {
+  if (Object.hasOwn(read('package.json').scripts ?? {}, hook)) throw new Error(`Forbidden release hook: ${hook}`);
 }
+if (Object.hasOwn(read('package.json'), 'workspaces')) throw new Error('Forbidden release workspaces');
 for (const [file, value] of [['package.json', expected], ['package-lock.json', expectedLock]]) {
   if (!isDeepStrictEqual(read(file), value)) throw new Error(`${file} differs from the source release transformation`);
 }
@@ -52,7 +54,7 @@ try {
     copyFileSync(join(root, file), join(scratch, file));
   }
   run('npm', ['ci', '--ignore-scripts'], scratch);
-  run('npm', ['run', 'build'], scratch);
+  run('node', [join(scratch, 'node_modules/typescript/bin/tsc'), '--project', 'tsconfig.json'], scratch);
   run('diff', ['-r', join(root, 'dist'), join(scratch, 'dist')], root);
 } finally {
   rmSync(scratch, { recursive: true, force: true });
