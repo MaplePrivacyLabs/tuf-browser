@@ -337,6 +337,7 @@ export class TUFClient {
         await this.backend.delete(this.getCacheKey(Roles.Targets));
       }
       if (snapshotKeysChanged) {
+        await this.backend.delete(this.getCacheKey(Roles.Timestamp));
         await this.backend.delete(this.getCacheKey(Roles.Snapshot));
         await this.backend.delete(this.getCacheKey(Roles.Targets));
       }
@@ -724,9 +725,11 @@ export class TUFClient {
     if (timestampMeta === null) {
       const snapshot = await this.getFromCache(Roles.Snapshot);
       const targets = await this.getFromCache(Roles.Targets);
-      if (!snapshot || !targets) {
+      const timestamp = (await this.getFromCache(Roles.Timestamp))!;
+      if (!snapshot || !targets ||
+        snapshot.signed.version !== timestamp.signed.meta["snapshot.json"].version ||
+        targets.signed.version !== snapshot.signed.meta["targets.json"].version) {
         // Resume an interrupted update without discarding rollback state.
-        const timestamp = (await this.getFromCache(Roles.Timestamp))!;
         const meta = await this.updateSnapshot(root, frozenTimestamp, timestamp);
         await this.updateTargets(root, frozenTimestamp, meta);
       }

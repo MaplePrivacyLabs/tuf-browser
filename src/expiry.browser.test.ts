@@ -42,6 +42,14 @@ async function repository(expiring = "none", consistent = true) {
     files.set(`${hash}.file.txt`, content);
     files.set("file.txt", content);
   }
+  async function rotateRoot() {
+    const metadata = JSON.parse(new TextDecoder().decode(files.get("root.json")));
+    metadata.signed.version = 2;
+    metadata.signed.roles.targets.threshold = 2;
+    metadata.signatures[0].sig = Uint8ArrayToHex(new Uint8Array(await crypto.subtle.sign(
+      "Ed25519", pair.privateKey, utf8(canonicalizeOLPC(metadata.signed)))));
+    files.set("2.root.json", encode(metadata));
+  }
   await publish();
   const requests: string[] = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
@@ -52,7 +60,7 @@ async function repository(expiring = "none", consistent = true) {
   }));
   const backend = new MemoryBackend();
   const client = () => new TUFClient("https://repo.invalid/", root, "test", undefined, { backend });
-  return { client, backend, files, publish, requests };
+  return { client, backend, files, publish, rotateRoot, requests };
 }
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
@@ -95,12 +103,32 @@ describe("trusted metadata freshness", () => {
     await expect(repo.client().updateTUF()).rejects.toThrow("New timestamp file has a lower version that the currently cached one.");
     expect((await repo.backend.read("test/timestamp.json"))?.signed.version).toBe(2);
   });
+  it("resumes after a timestamp was persisted but snapshot download failed", async () => {
+    const repo = await repository();
+    await repo.client().updateTUF();
+    await repo.publish(2, utf8("second"));
+    const snapshot = repo.files.get("2.snapshot.json")!;
+    repo.files.delete("2.snapshot.json");
+    await expect(repo.client().updateTUF()).rejects.toThrow("Failed to fetch file: 404");
+    await expect(repo.client().getTarget("file.txt")).rejects.toThrow("Cached snapshot version does not match trusted timestamp.");
+    repo.files.set("2.snapshot.json", snapshot);
+    await repo.client().updateTUF();
+    expect(new TextDecoder().decode(await repo.client().getTarget("file.txt"))).toBe("second");
+  });
+  it("rechecks cached targets against a rotated root threshold", async () => {
+    const repo = await repository();
+    await repo.client().updateTUF();
+    await repo.rotateRoot();
+    await expect(repo.client().updateTUF()).rejects.toThrow("Failed verifying cached targets role signature(s).");
+    await expect(repo.client().getTarget("file.txt")).rejects.toThrow("Failed verifying cached targets role signature(s).");
+  });
   for (const consistent of [true, false]) {
     it(`serves healthy cached and newly published targets (consistent=${consistent})`, async () => {
       const repo = await repository("none", consistent);
       await repo.client().updateTUF();
       await repo.client().updateTUF();
       expect(new TextDecoder().decode(await repo.client().getTarget("file.txt"))).toBe("first");
+      expect(repo.requests.at(-1)).toMatch(consistent ? /^[a-f0-9]+\.file\.txt$/ : /^file\.txt$/);
       await repo.publish(2, utf8("second"));
       await repo.client().updateTUF();
       expect(new TextDecoder().decode(await repo.client().getTarget("file.txt"))).toBe("second");
