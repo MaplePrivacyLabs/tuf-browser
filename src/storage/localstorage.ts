@@ -1,10 +1,10 @@
 import { FileBackend } from "../storage.js";
 import { Metafile } from "../types.js";
-import { storedBytes } from "./encoding.js";
 import {
   createRawBytesWrapper,
   decodeRawBytesWrapper,
   isRawBytesWrapper,
+  storedBytes,
 } from "./encoding.js";
 
 export class LocalStorageBackend implements FileBackend {

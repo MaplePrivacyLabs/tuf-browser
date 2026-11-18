@@ -1,7 +1,11 @@
 import type { FileBackend } from "../storage.js";
 import type { Metafile } from "../types.js";
-import { storedBytes } from "./encoding.js";
-import { createRawBytesWrapper, decodeRawBytesWrapper, isRawBytesWrapper } from "./encoding.js";
+import {
+  createRawBytesWrapper,
+  decodeRawBytesWrapper,
+  isRawBytesWrapper,
+  storedBytes,
+} from "./encoding.js";
 
 export class MemoryBackend implements FileBackend {
   private cache = new Map<string, Metafile | { __raw_bytes__: string }>();
