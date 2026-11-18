@@ -18,7 +18,7 @@ const AFTER_EXPIRY = new Date("2030-01-03T00:00:00Z");
 const EXPIRES_LATE = "2031-01-01T00:00:00Z";
 
 const utf8 = (value: string) => new TextEncoder().encode(value);
-const text = (bytes: BufferSource) => new TextDecoder().decode(bytes);
+const text = (bytes: ArrayBuffer | Uint8Array) => new TextDecoder().decode(bytes);
 const hex = (buffer: ArrayBuffer) => Uint8ArrayToHex(new Uint8Array(buffer));
 
 // Pretty-printed on purpose: the bytes on the wire differ from canonical JSON,
