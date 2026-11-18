@@ -6,7 +6,8 @@ import { resolve } from 'node:path';
 const root = resolve(import.meta.dirname, '..');
 const refs = [process.env.GITHUB_REF, process.env.GITHUB_HEAD_REF,
   process.env.GITHUB_BASE_REF, process.env.GITHUB_REF_NAME];
-const releaseRef = refs.some(ref => ref === 'refs/heads/maple/release' || ref === 'maple/release');
+const releaseRef = refs.some(ref => ref === 'refs/heads/maple/release' || ref === 'maple/release' ||
+  ref?.startsWith('refs/tags/prebuilt-'));
 const trackedOutput = execFileSync('git', ['ls-files', '--', 'dist'], { cwd: root, encoding: 'utf8' }).trim();
 const manifest = existsSync(resolve(root, 'release.json'));
 if ((releaseRef || trackedOutput) && !manifest) {
