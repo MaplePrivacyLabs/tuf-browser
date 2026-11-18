@@ -28,20 +28,25 @@ async function repository(expiring = "none", consistent = true) {
   const files = new Map<string, Uint8Array>();
   const payload = utf8("first");
   let root = "";
-  async function publish(version = 1, content = payload, renew = false) {
+  async function publish(version = 1, content = payload, renew = false, lowerVersion = version) {
     const hash = Uint8ArrayToHex(new Uint8Array(await crypto.subtle.digest("SHA-256", content)));
+    const pin = async (name: string) => {
+      const raw = files.get(name)!;
+      return { version: lowerVersion, length: raw.length, hashes: { sha256:
+        Uint8ArrayToHex(new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(raw)))) } };
+    };
     for (const type of ["root", "targets", "snapshot", "timestamp"]) {
-      const signed = { _type: type, spec_version: "1.0.31", version: type === "root" ? 1 : version,
+      const signed = { _type: type, spec_version: "1.0.31", version: type === "root" ? 1 : type === "timestamp" ? version : lowerVersion,
         expires: type === expiring && !renew ? "2030-01-02T00:00:00Z" : "2031-01-01T00:00:00Z",
         ...(type === "root" ? { keys: { [keyid]: key, [extraId]: extraKey }, roles, consistent_snapshot: consistent } : {}),
         ...(type === "targets" ? { targets: { "file.txt": { length: content.length, hashes: { sha256: hash } } } } : {}),
-        ...(type === "snapshot" ? { meta: { "targets.json": { version } } } : {}),
-        ...(type === "timestamp" ? { meta: { "snapshot.json": { version } } } : {}),
+        ...(type === "snapshot" ? { meta: { "targets.json": await pin("targets.json") } } : {}),
+        ...(type === "timestamp" ? { meta: { "snapshot.json": await pin("snapshot.json") } } : {}),
       };
       const sig = Uint8ArrayToHex(new Uint8Array(await crypto.subtle.sign("Ed25519", pair.privateKey, utf8(canonicalizeOLPC(signed)))));
       const raw = encode({ signed, signatures: [{ keyid, sig }] });
       files.set(`${type}.json`, raw);
-      if (type !== "root") files.set(`${version}.${type}.json`, raw);
+      if (type !== "root") files.set(`${type === "timestamp" ? version : lowerVersion}.${type}.json`, raw);
       if (type === "root") root = new TextDecoder().decode(raw);
     }
     files.set(`${hash}.file.txt`, content);
@@ -126,6 +131,14 @@ describe("trusted metadata freshness", () => {
     await repo.rotateRoot();
     await expect(repo.client().updateTUF()).rejects.toThrow("Failed verifying cached targets role signature(s).");
     await expect(repo.client().getTarget("file.txt")).rejects.toThrow("Failed verifying cached targets role signature(s).");
+  });
+  it("rejects cached bytes that do not satisfy a new timestamp's same-version hash pin", async () => {
+    const repo = await repository();
+    await repo.client().updateTUF();
+    await repo.publish(2, utf8("other"), false, 1);
+    repo.files.delete("1.snapshot.json");
+    await expect(repo.client().updateTUF()).rejects.toThrow("Failed to fetch file: 404");
+    await expect(repo.client().getTarget("file.txt")).rejects.toThrow("Cached snapshot: sha256 hash mismatch");
   });
   for (const consistent of [true, false]) {
     it(`serves healthy cached and newly published targets (consistent=${consistent})`, async () => {
