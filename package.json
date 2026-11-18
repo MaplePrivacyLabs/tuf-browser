@@ -31,7 +31,6 @@
     "test": "vitest run --config vite.config.playwright.ts",
     "test:playwright": "vitest --config vite.config.playwright.ts",
     "lint": "eslint . --fix",
-    "prepare": "tsc",
     "check:release": "node scripts/check-release.mjs"
   },
   "keywords": [
