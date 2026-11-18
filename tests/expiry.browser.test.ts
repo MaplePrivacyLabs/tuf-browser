@@ -282,6 +282,20 @@ describe("trusted metadata freshness", () => {
       vi.setSystemTime(AFTER_EXPIRY);
 
       await expect(repo.client().updateTUF()).rejects.toThrow(freezeError("timestamp"));
+
+      // The same holds when the previous refresh stored the timestamp but not its snapshot: the
+      // expired timestamp must stop the refresh before it tries to complete the chain.
+      const interrupted = await createRepository({ expiring: "timestamp" });
+      await interrupted.client().updateTUF();
+
+      await interrupted.publish({ version: 2 });
+      interrupted.files.delete("2.snapshot.json");
+      await expect(interrupted.client().updateTUF()).rejects.toThrow("Failed to fetch file: 404");
+      expect((await interrupted.cached("timestamp"))?.version).toBe(2);
+      expect((await interrupted.cached("snapshot"))?.version).toBe(1);
+
+      vi.setSystemTime(AFTER_EXPIRY);
+      await expect(interrupted.client().updateTUF()).rejects.toThrow(freezeError("timestamp"));
     });
 
     it("rejects a higher-version expired timestamp without losing rollback state", async () => {
