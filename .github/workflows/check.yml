@@ -1,0 +1,20 @@
+name: Build and test
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26.13.1'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+        if: hashFiles('release.json') == ''
+      - run: npx playwright install --with-deps chromium
+      - run: npm test
+      - run: node scripts/check-release.mjs
+        if: hashFiles('release.json') != ''
