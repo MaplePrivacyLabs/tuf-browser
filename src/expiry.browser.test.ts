@@ -18,8 +18,13 @@ async function repository(expiring = "none", consistent = true) {
     public: Uint8ArrayToHex(new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey))),
   }};
   const keyid = Uint8ArrayToHex(new Uint8Array(await crypto.subtle.digest("SHA-256", utf8(canonicalizeOLPC(key)))));
+    const extraPair = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]);
+    const extraKey = { ...key, keyval: { public: Uint8ArrayToHex(new Uint8Array(
+      await crypto.subtle.exportKey("raw", extraPair.publicKey))) } };
+    const extraId = Uint8ArrayToHex(new Uint8Array(await crypto.subtle.digest(
+      "SHA-256", utf8(canonicalizeOLPC(extraKey)))));
   const role = { keyids: [keyid], threshold: 1 };
-  const roles = { root: role, timestamp: role, snapshot: role, targets: role };
+  const roles = { root: role, timestamp: role, snapshot: role, targets: { keyids: [keyid, extraId], threshold: 1 } };
   const files = new Map<string, Uint8Array>();
   const payload = utf8("first");
   let root = "";
@@ -28,7 +33,7 @@ async function repository(expiring = "none", consistent = true) {
     for (const type of ["root", "targets", "snapshot", "timestamp"]) {
       const signed = { _type: type, spec_version: "1.0.31", version: type === "root" ? 1 : version,
         expires: type === expiring && !renew ? "2030-01-02T00:00:00Z" : "2031-01-01T00:00:00Z",
-        ...(type === "root" ? { keys: { [keyid]: key }, roles, consistent_snapshot: consistent } : {}),
+        ...(type === "root" ? { keys: { [keyid]: key, [extraId]: extraKey }, roles, consistent_snapshot: consistent } : {}),
         ...(type === "targets" ? { targets: { "file.txt": { length: content.length, hashes: { sha256: hash } } } } : {}),
         ...(type === "snapshot" ? { meta: { "targets.json": { version } } } : {}),
         ...(type === "timestamp" ? { meta: { "snapshot.json": { version } } } : {}),
@@ -45,13 +50,7 @@ async function repository(expiring = "none", consistent = true) {
   async function rotateRoot() {
     const metadata = JSON.parse(new TextDecoder().decode(files.get("root.json")));
     metadata.signed.version = 2;
-    const extraPair = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]);
-    const extraKey = { ...key, keyval: { public: Uint8ArrayToHex(new Uint8Array(
-      await crypto.subtle.exportKey("raw", extraPair.publicKey))) } };
-    const extraId = Uint8ArrayToHex(new Uint8Array(await crypto.subtle.digest(
-      "SHA-256", utf8(canonicalizeOLPC(extraKey)))));
-    metadata.signed.keys[extraId] = extraKey;
-    metadata.signed.roles.targets = { keyids: [keyid, extraId], threshold: 2 };
+    metadata.signed.roles.targets.threshold = 2;
     metadata.signatures[0].sig = Uint8ArrayToHex(new Uint8Array(await crypto.subtle.sign(
       "Ed25519", pair.privateKey, utf8(canonicalizeOLPC(metadata.signed)))));
     files.set("2.root.json", encode(metadata));

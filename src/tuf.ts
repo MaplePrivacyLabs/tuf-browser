@@ -322,14 +322,14 @@ export class TUFClient {
     // This allows recovery from fast-forward attacks after key rotation.
     if (root.version > oldRoot.version) {
       const timestampKeysChanged =
-        JSON.stringify(root.roles.timestamp.keyids.sort()) !==
-        JSON.stringify(oldRoot.roles.timestamp.keyids.sort());
+        JSON.stringify(root.roles.timestamp.keyids.slice().sort()) !==
+        JSON.stringify(oldRoot.roles.timestamp.keyids.slice().sort());
       const snapshotKeysChanged =
-        JSON.stringify(root.roles.snapshot.keyids.sort()) !==
-        JSON.stringify(oldRoot.roles.snapshot.keyids.sort());
+        JSON.stringify(root.roles.snapshot.keyids.slice().sort()) !==
+        JSON.stringify(oldRoot.roles.snapshot.keyids.slice().sort());
       const targetsKeysChanged =
-        JSON.stringify(root.roles.targets.keyids.sort()) !==
-        JSON.stringify(oldRoot.roles.targets.keyids.sort());
+        JSON.stringify(root.roles.targets.keyids.slice().sort()) !==
+        JSON.stringify(oldRoot.roles.targets.keyids.slice().sort());
 
       if (timestampKeysChanged) {
         await this.backend.delete(this.getCacheKey(Roles.Timestamp));
