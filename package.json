@@ -27,7 +27,6 @@
     }
   },
   "scripts": {
-    "build": "tsc",
     "test": "vitest run --config vite.config.playwright.ts",
     "test:playwright": "vitest --config vite.config.playwright.ts",
     "lint": "eslint . --fix",
